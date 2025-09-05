@@ -4,10 +4,8 @@ from openpilot.common.numpy_fast import clip
 from openpilot.selfdrive.car import apply_std_steer_angle_limits
 from openpilot.selfdrive.car.ford import fordcan
 from openpilot.selfdrive.car.ford.values import CarControllerParams, FordFlags
-from openpilot.selfdrive.car.interfaces import CarControllerBase
+from openpilot.selfdrive.car.interfaces import CarControllerBase, get_max_allowed_accel
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX
-
-from openpilot.selfdrive.car.interfaces import get_max_allowed_accel
 
 GearShifter = car.CarState.GearShifter
 LongCtrlState = car.CarControl.Actuators.LongControlState
@@ -26,6 +24,20 @@ def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_c
   return clip(apply_curvature, -CarControllerParams.CURVATURE_MAX, CarControllerParams.CURVATURE_MAX)
 
 
+def calculate_blend_ratio(steering_angle, steering_rate):
+  # Calculate angle factor (0-1)
+  angle_factor = min(1.0, steering_angle / 30.0)  # Max effect at 30 degrees
+    
+  # Calculate rate factor (0-1)
+  rate_factor = min(1.0, steering_rate / 150.0)  # Max effect at 150 deg/s
+    
+  # Dynamic weight calculation (60% angle, 40% rate)
+  dynamic_ratio = 0.6 * angle_factor + 0.4 * rate_factor
+    
+  # Limit to 0.1-0.9 range for system stability
+  return max(0.1, min(0.9, dynamic_ratio))
+
+
 class CarController(CarControllerBase):
   def __init__(self, dbc_name, CP, VM):
     self.CP = CP
@@ -39,6 +51,8 @@ class CarController(CarControllerBase):
     self.lkas_enabled_last = False
     self.steer_alert_last = False
     self.lead_distance_bars_last = None
+    self.human_turn = 0
+    self.steerold_angle = 0
 
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
     can_sends = []
@@ -73,7 +87,22 @@ class CarController(CarControllerBase):
         # blocked by panda safety, usually while the driver is overriding and limited to at most 1 message while the
         # driver is not overriding.
         if CS.out.steeringPressed:
-          self.apply_curvature_last = actuators.curvature
+          steering_angle = abs(CS.out.steeringAngleDeg)
+          steering_rate = abs(CS.out.steeringRateDeg)
+          steer_angle_poor = abs(steering_angle - self.steerold_angle)
+            
+          if steer_angle_poor > 30:
+            self.apply_curvature_last = 0
+            self.human_turn = 2
+          elif steering_angle > 10 and self.human_turn:
+            blend_ratio = calculate_blend_ratio(steering_angle, steering_rate)
+            self.apply_curvature_last = actuators.curvature * (1 - blend_ratio) + current_curvature * blend_ratio
+            self.human_turn = 1
+          else:
+            self.human_turn = 0
+        else:
+          self.steerold_angle = abs(CS.out.steeringAngleDeg)
+          self.human_turn = 0
         # }} PFEIFER - FSH
         apply_curvature = apply_ford_curvature_limits(actuators.curvature, self.apply_curvature_last, current_curvature, CS.out.vEgoRaw)
       else:
@@ -85,9 +114,12 @@ class CarController(CarControllerBase):
         # TODO: extended mode
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
-        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode, 0., 0., -apply_curvature, 0., counter))
+        # Add torque limit based on speed
+        torque_limit = clip(1.0 - (CS.out.vEgoRaw / 30.0), 0.1, 1.0)  # Reduce torque at higher speeds
+        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode, 0., 0., -apply_curvature * torque_limit, 0., counter))
       else:
-        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive, 0., 0., -apply_curvature, 0.))
+        torque_limit = clip(1.0 - (CS.out.vEgoRaw / 30.0), 0.1, 1.0)
+        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive, 0., 0., -apply_curvature * torque_limit, 0.))
 
     # send lka msg at 33Hz
     if (self.frame % CarControllerParams.LKA_STEP) == 0:
