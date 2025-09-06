@@ -109,17 +109,14 @@ class CarController(CarControllerBase):
         apply_curvature = 0.
 
       self.apply_curvature_last = apply_curvature
-
+      
       if self.CP.flags & FordFlags.CANFD:
         # TODO: extended mode
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
-        # Add torque limit based on speed
-        torque_limit = clip(1.0 - (CS.out.vEgoRaw / 30.0), 0.1, 1.0)  # Reduce torque at higher speeds
-        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode, 0., 0., -apply_curvature * torque_limit, 0., counter))
+        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode, 0., 0., -apply_curvature, 0., counter))
       else:
-        torque_limit = clip(1.0 - (CS.out.vEgoRaw / 30.0), 0.1, 1.0)
-        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive, 0., 0., -apply_curvature * torque_limit, 0.))
+        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive, 0., 0., -apply_curvature, 0.))
 
     # send lka msg at 33Hz
     if (self.frame % CarControllerParams.LKA_STEP) == 0:
