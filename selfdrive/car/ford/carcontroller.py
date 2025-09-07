@@ -91,7 +91,7 @@ class CarController(CarControllerBase):
           steering_rate = abs(CS.out.steeringRateDeg)
           steer_angle_poor = abs(steering_angle - self.steerold_angle)
             
-          if steer_angle_poor > 30:
+          if steer_angle_poor > 20:
             self.apply_curvature_last = 0
             self.human_turn = 2
           elif steering_angle > 10 and self.human_turn:
