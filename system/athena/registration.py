@@ -27,6 +27,7 @@ def is_registered_device() -> bool:
 def register(show_spinner=False, register_konik=False) -> str | None:
   params = Params()
 
+  return UNREGISTERED_DONGLE_ID
   IMEI = params.get("IMEI", encoding='utf8')
   HardwareSerial = params.get("HardwareSerial", encoding='utf8')
   dongle_id: str | None = params.get("DongleId", encoding='utf8')
@@ -50,8 +51,8 @@ def register(show_spinner=False, register_konik=False) -> str | None:
     # Block until we get the imei
     serial = HARDWARE.get_serial()
     start_time = time.monotonic()
-    imei1: str | None = None
-    imei2: str | None = None
+    imei1='865420071781912'
+    imei2='865420071781904'
     while imei1 is None and imei2 is None:
       try:
         imei1, imei2 = HARDWARE.get_imei(0), HARDWARE.get_imei(1)
