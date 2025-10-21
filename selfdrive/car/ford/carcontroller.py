@@ -23,6 +23,20 @@ def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_c
   return clip(apply_curvature, -CarControllerParams.CURVATURE_MAX, CarControllerParams.CURVATURE_MAX)
 
 
+def calculate_blend_ratio(steering_angle, steering_rate):
+  # Calculate angle factor (0-1)
+  angle_factor = min(1.0, steering_angle / 30.0)  # Max effect at 30 degrees
+    
+  # Calculate rate factor (0-1)
+  rate_factor = min(1.0, steering_rate / 150.0)  # Max effect at 150 deg/s
+    
+  # Dynamic weight calculation (60% angle, 40% rate)
+  dynamic_ratio = 0.6 * angle_factor + 0.4 * rate_factor
+    
+  # Limit to 0.1-0.9 range for system stability
+  return max(0.1, min(0.9, dynamic_ratio))
+
+
 class CarController(CarControllerBase):
   def __init__(self, dbc_name, CP, VM):
     self.CP = CP
@@ -36,7 +50,9 @@ class CarController(CarControllerBase):
     self.lkas_enabled_last = False
     self.steer_alert_last = False
     self.lead_distance_bars_last = None
-
+    self.human_turn = 0
+    self.steerold_angle = 0
+    
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
     can_sends = []
 
@@ -65,12 +81,24 @@ class CarController(CarControllerBase):
       if CC.latActive:
         # apply rate limits, curvature error limit, and clip to signal range
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
-        # PFEIFER - FSH {{
-        # Ignore limits while overriding, this prevents pull when releasing the wheel. This will cause messages to be
-        # blocked by panda safety, usually while the driver is overriding and limited to at most 1 message while the
-        # driver is not overriding.
+        
         if CS.out.steeringPressed:
-          self.apply_curvature_last = actuators.curvature
+          steering_angle = abs(CS.out.steeringAngleDeg)
+          steering_rate = abs(CS.out.steeringRateDeg)
+          steer_angle_poor = abs(steering_angle - self.steerold_angle)
+            
+          if steer_angle_poor > 30:
+            self.apply_curvature_last = 0
+            self.human_turn = 2
+          elif steering_angle > 10 and self.human_turn:
+            blend_ratio = calculate_blend_ratio(steering_angle, steering_rate)
+            self.apply_curvature_last = actuators.curvature * (1 - blend_ratio) + current_curvature * blend_ratio
+            self.human_turn = 1
+          else:
+            self.human_turn = 0
+        else:
+          self.steerold_angle = abs(CS.out.steeringAngleDeg)
+          self.human_turn = 0
         # }} PFEIFER - FSH
         apply_curvature = apply_ford_curvature_limits(actuators.curvature, self.apply_curvature_last, current_curvature, CS.out.vEgoRaw)
       else:
